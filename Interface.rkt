@@ -1,0 +1,296 @@
+;; Part B
+;; Karen Xu
+;; University of Chicago
+
+#lang typed/racket
+(require typed/test-engine/racket-tests)
+(require typed/2htdp/image)
+(require typed/2htdp/universe)
+(require "uchicago151.rkt")
+(require "Structure.rkt")
+
+
+
+;; Rendering --------------------------------------------------------------
+
+
+(define heading
+  (above
+   (text "PENTAGO" 40 'darkred)
+   (text "" 11 'white)
+   (text "Instructions" 20 'black)
+   (text "Place: enter number for row and col" 15 'black)
+   (text "Twist: clockwise: j is NW, k is NE, l is SW, ; is SE" 15 'black)
+   (text "counter-clockwise: a is NW, s is NE, d is SW, f is SE" 15 'black)
+   (text "" 11 'white)))
+
+(: draw : World -> Image)
+;; draws game-image
+(define (draw w)
+  (match w
+    [(World g r c p1 p2 s)
+     (above
+      heading
+      ;(text display-name 20 'black)
+      (game-image (World-game w) 400)
+      (text (if (= r 10)
+                "row:"
+                (string-append "row: " (number->string r)))
+            15 'black)
+      (text (if (= c 10)
+                "col:"
+                (string-append "col: " (number->string c)))
+            15 'black)
+      (if (stop w)
+          (text (if (equal? (outcome g) 'tie)
+                    "Tie!"
+                    (string-append 
+                     "Winner: "
+                     (symbol->string (outcome g)))) 15 'darkred)
+          (text "" 15 'white)))]))
+
+
+
+
+;; BOT --------------------------------------------------------------------
+
+(: first-available : Game -> (Optional Move))
+;; give back (Some Move) or 'none
+(define (first-available g)
+  (match g
+    [(Game b p a)
+     (if (symbol=? a 'place)
+         (local
+           {(: bot-place : Loc -> (Optional Move))
+            ;; runs through board locs starting from 0 0 to find empty space
+            (define (bot-place l)
+              (match l
+                [(Loc r c)
+                 (if (or (> r 5) (> c 5))
+                     'none
+                     (cond
+                       [(equal? (board-ref b (Loc r c)) 'none)
+                        (Some (Move (Loc r c) 'NW 'clockwise))]
+                       [(< r 5) (bot-place (Loc (add1 r) c))]
+                       [else (bot-place (Loc 0 (add1 c)))]))]))}
+           (bot-place (Loc 0 0)))
+         (Some (Move (Loc 0 0) 'NW 'clockwise)))]))
+(check-expect (first-available (Game grant 'white 'place))
+              (Some (Move (Loc 1 0) 'NW 'clockwise)))
+(check-expect (first-available (Game grant 'black 'twist))
+              (Some (Move (Loc 0 0) 'NW 'clockwise)))
+
+(define grant-world (World grant-game 10 10 'kay 'jay first-available))
+
+(: tick : World -> World)
+;; both bots place and twist
+(define (tick w)
+  (match w
+    [(World g r c p1 p2 s)
+     (match (s g)
+       [(Some a)
+        (match a
+          [(Move l q d)
+           (World (twist-quadrant
+                   (place-marble g (Game-next-player g) l) q d)
+                  r c p1 p2 s)])])]))
+(check-expect
+ (World-game (tick grant-world))
+ (Game
+  (Board
+   (list 'none (Some 'white) (Some 'black) 'none 'none 'none 'none 'none 'none)
+   '(none none none none none none none none none)
+   '(none none none none none none none none none)
+   (list 'none (Some 'white) 'none 'none 'none 'none 'none 'none 'none))
+  'black
+  'place))
+
+(: white-tick : World -> World)
+;; first player (white) bot places and twists 
+(define (white-tick w)
+  (match w
+    [(World g r c p1 p2 s)
+     (match (s g)
+       [(Some a)
+        (match a
+          [(Move l q d)
+           (if (equal? (Game-next-player g) 'white)
+               (World (twist-quadrant
+                       (place-marble g (Game-next-player g) l) q d)
+                      r c p1 p2 s)
+               w)])])]))
+(check-expect
+ (World-game (white-tick grant-world))
+ (Game
+  (Board
+   (list 'none (Some 'white) (Some 'black) 'none 'none 'none 'none 'none 'none)
+   '(none none none none none none none none none)
+   '(none none none none none none none none none)
+   (list 'none (Some 'white) 'none 'none 'none 'none 'none 'none 'none))
+  'black
+  'place))
+(check-expect
+ (World-game
+  (white-tick
+   (World (Game grant 'black 'place) 10 10 'kay 'jay first-available)))
+ (Game grant 'black 'place))
+
+(: black-tick : World -> World)
+;; first player (white) bot places and twists 
+(define (black-tick w)
+  (match w
+    [(World g r c p1 p2 s)
+     (match (s g)
+       [(Some a)
+        (match a
+          [(Move l q d)
+           (if (equal? (Game-next-player g) 'black)
+               (World (twist-quadrant
+                       (place-marble g (Game-next-player g) l) q d)
+                      r c p1 p2 s)
+               w)])]
+       [_ (error "bug")])]))
+(check-expect
+ (World-game (black-tick grant-world)) grant-game)
+(check-expect
+ (World-game
+  (black-tick
+   (World (Game grant 'black 'place) 10 10 'kay 'jay first-available)))
+ (Game
+  (Board
+   (list 'none (Some 'black) (Some 'black) 'none 'none 'none 'none 'none 'none)
+   '(none none none none none none none none none)
+   '(none none none none none none none none none)
+   (list 'none (Some 'white) 'none 'none 'none 'none 'none 'none 'none))
+  'white
+  'place))
+
+
+
+
+
+;; HUMAN ------------------------------------------------------------------
+
+(: str->num : String -> Integer)
+;; converts key input of a string to a number
+(define (str->num s)
+  (match s
+    ["0" 0]
+    ["1" 1]
+    ["2" 2]
+    ["3" 3]
+    ["4" 4]
+    ["5" 5]
+    [_ 10]))
+(check-expect (str->num "0") 0)
+(check-expect (str->num "3") 3)
+(check-expect (str->num "d") 10)
+
+
+(: key : World String -> World)
+;; places marble or twists quadrent based on key pressed
+(define (key w k)
+  (match w
+    [(World g r c p1 p2 s)
+     (match g
+       [(Game b p a)
+        (match a
+          ['place
+           ;; enter r c of loc desired
+           (cond
+             [(= r 10) (World g (str->num k) c p1 p2 s)]
+             [(= c 10) (World (place-marble g p (Loc r (str->num k)))
+                              r (str->num k) p1 p2 s)]
+             [else w])]
+          ['twist
+           (match k
+             ["j" (World
+                   (twist-quadrant g 'NW 'clockwise) 10 10 p1 p2 s)]
+             ["k" (World
+                   (twist-quadrant g 'NE 'clockwise) 10 10 p1 p2 s)]
+             ["l" (World
+                   (twist-quadrant g 'SW 'clockwise) 10 10 p1 p2 s)]
+             [";" (World
+                   (twist-quadrant g 'SE 'clockwise) 10 10 p1 p2 s)]
+             ["a" (World
+                   (twist-quadrant g 'NW 'counterclockwise) 10 10 p1 p2 s)]
+             ["s" (World
+                   (twist-quadrant g 'NE 'counterclockwise) 10 10 p1 p2 s)]
+             ["d" (World
+                   (twist-quadrant g 'SW 'counterclockwise) 10 10 p1 p2 s)]
+             ["f" (World
+                   (twist-quadrant g 'SE 'counterclockwise) 10 10 p1 p2 s)]
+             [_ w])])])]))
+(check-expect (World-row (key grant-world "1")) 1)
+(check-expect
+ (World-game (key (World grant-game 2 10 'k 'j first-available) "3"))
+ (Game
+  (Board
+   (list (Some 'black) 'none 'none 'none 'none 'none 'none 'none 'none)
+   (list 'none 'none 'none 'none 'none 'none (Some 'white) 'none 'none)
+   '(none none none none none none none none none)
+   (list 'none (Some 'white) 'none 'none 'none 'none 'none 'none 'none))
+  'white
+  'twist))
+(check-expect
+ (World-game
+  (key (World (Game grant 'black 'twist) 10 10 'k 'j first-available) "a"))
+ (Game
+  (Board
+   (list 'none 'none 'none 'none 'none 'none (Some 'black) 'none 'none)
+   '(none none none none none none none none none)
+   '(none none none none none none none none none)
+   (list 'none (Some 'white) 'none 'none 'none 'none 'none 'none 'none))
+  'white
+  'place))
+
+
+
+;; General Game -----------------------------------------------------------
+
+(: stop : World -> Boolean)
+;; stop when game-over is true
+(define (stop w)
+  (if (game-over? (World-game w)) #t #f))
+(check-expect (stop grant-world) #f)
+(check-expect
+ (stop (World (Game jackson 'white 'place) 10 10 'kay 'jay first-available)) #t)
+
+
+(: pentago : (U Human Bot) (U Human Bot) -> World)
+;; creates world for two players
+(define (pentago p1 p2)
+  (match* (p1 p2)
+    [((Bot n1 m1) (Bot n2 m2))
+     (big-bang (World new-game 10 10 n1 n2 m1) : World 
+               [name "Pentago"]
+               [to-draw draw]
+               [on-key key]
+               [on-tick tick 1/5]
+               [stop-when stop])]
+    [((Bot n1 m1) _)
+     (big-bang (World new-game 10 10 n1 p2 m1) : World 
+               [name "Pentago"]
+               [to-draw draw]
+               [on-key key]
+               [on-tick white-tick 1/5]
+               [stop-when stop])]
+    [(_ (Bot n2 m2))
+     (big-bang (World new-game 10 10 p1 n2 m2) : World 
+               [name "Pentago"]
+               [to-draw draw]
+               [on-key key]
+               [on-tick black-tick 1/5]
+               [stop-when stop])]
+    [(_ _)
+     (big-bang (World new-game 10 10 p1 p2 first-available) : World 
+               [name "Pentago"]
+               [to-draw draw]
+               [on-key key]
+               [stop-when stop])]))
+
+
+
+(test)
+
+(provide (all-defined-out))
